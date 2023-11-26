@@ -8,7 +8,7 @@ import random
 import sys
 import traceback
 from typing import Optional
-from locust import HttpUser, task, events, constant_pacing
+from locust import HttpUser, task, tag, events, constant_pacing
 import copy
 import json
 import time
@@ -466,6 +466,39 @@ class TgiProvider(BaseProvider):
             )
 
 
+class TorchServeProvider(BaseProvider):
+    DEFAULT_MODEL_NAME = "<unused>"
+
+    def get_url(self):
+        return f"/predictions/{self.model}"
+
+    def format_payload(self, prompt, max_tokens):
+        return {"data": prompt}
+
+    def parse_output_json(self, data, prompt):
+        if not self.parsed_options.stream:
+            if "tokens" in data:
+                return ChunkMetadata(
+                    text=data["text"],
+                    logprob_tokens=len(data["tokens"]),
+                    usage_tokens=None,
+                    prompt_usage_tokens=None,
+                )
+            else:
+                return ChunkMetadata(
+                    text=data["text"],
+                    logprob_tokens=None,
+                    usage_tokens=None,
+                    prompt_usage_tokens=None,
+                )
+        else:
+            return ChunkMetadata(
+                text=data["text"],
+                logprob_tokens=1,
+                usage_tokens=None,
+                prompt_usage_tokens=None,
+            )
+
 PROVIDER_CLASS_MAP = {
     "fireworks": FireworksProvider,
     "vllm": VllmProvider,
@@ -475,6 +508,7 @@ PROVIDER_CLASS_MAP = {
     "triton-infer": TritonInferProvider,
     "triton-generate": TritonGenerateProvider,
     "tgi": TgiProvider,
+    "torchserve": TorchServeProvider,
 }
 
 
@@ -638,7 +672,7 @@ class LLMUser(HttpUser):
         self.first_done = False
 
     @task
-    def generate_text(self):
+    def generate_text_json(self):
         max_tokens = self.max_tokens_sampler.sample()
         data = self.provider_formatter.format_payload(self.prompt, max_tokens)
         t_start = time.perf_counter()
@@ -667,21 +701,23 @@ class LLMUser(HttpUser):
 
                 if len(chunk) == 0:
                     continue  # come providers send empty lines between data chunks
-                if done:
-                    if chunk != b"data: [DONE]":
-                        print(f"WARNING: Received more chunks after [DONE]: {chunk}")
+                if self.environment.parsed_options.stream_response_done_flag:
+                    if done:
+                        if chunk != b"data: [DONE]":
+                            print(f"WARNING: Received more chunks after [DONE]: {chunk}")
                 try:
                     now = time.perf_counter()
                     dur_chunks.append(now - t_prev)
                     t_prev = now
                     if self.stream:
-                        assert chunk.startswith(
-                            b"data:"
-                        ), f"Unexpected chunk not starting with 'data': {chunk}"
-                        chunk = chunk[len(b"data:") :]
-                        if chunk.strip() == b"[DONE]":
-                            done = True
-                            continue
+                        if self.environment.parsed_options.stream_response_done_flag:
+                            assert chunk.startswith(
+                                b"data:"
+                            ), f"Unexpected chunk not starting with 'data': {chunk}"
+                            chunk = chunk[len(b"data:") :]
+                            if chunk.strip() == b"[DONE]":
+                                done = True
+                                continue
                     data = orjson.loads(chunk)
                     out = self.provider_formatter.parse_output_json(data, self.prompt)
                     if out.usage_tokens:
@@ -901,6 +937,12 @@ def init_parser(parser):
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Print the result of each generation",
+    )
+    parser.add_argument(
+        "--stream-response-done-flag",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Flag of the completion in the result of each generation",
     )
 
 
