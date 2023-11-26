@@ -108,6 +108,11 @@ Benchmark local Triton deployment with a given prompt at 1 QPS:
 locust -u 100 -r 100  --prompt-text "$PROMPT" -o 100 --provider triton-infer -H http://localhost:8000 --tokenizer /path/to/my/hf/tokenizer --qps 1
 ```
 
+Benchmark local TorchServe with a given promt at 0.5 QPS:
+
+```bash
+locust  --config locust.conf  -H http://localhost:8080 --stream --model=llama-2-13b --provider torchserve --summary-file results.csv --prompt-text "$PROMPT" -o 25 -u 8 -t 1min --qps 0.5
+```
 
 ## UI mode
 

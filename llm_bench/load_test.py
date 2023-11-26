@@ -473,7 +473,7 @@ class TorchServeProvider(BaseProvider):
         return f"/predictions/{self.model}"
 
     def format_payload(self, prompt, max_tokens):
-        return {"data": prompt}
+        return prompt
 
     def parse_output_json(self, data, prompt):
         if not self.parsed_options.stream:
@@ -694,14 +694,17 @@ class LLMUser(HttpUser):
             except Exception as e:
                 raise RuntimeError(f"Error in response: {response.text}") from e
             t_first_token = None
-            for chunk in response.iter_lines(delimiter=b"\n\n"):
+            chunk_iter = response.iter_lines(delimiter=b"\n\n")
+            if self.provider == "torchserve":
+                chunk_iter = response.iter_content(chunk_size=None) 
+            for chunk in chunk_iter:
                 if t_first_token is None:
                     t_first_token = time.perf_counter()
                     t_prev = time.perf_counter()
 
                 if len(chunk) == 0:
                     continue  # come providers send empty lines between data chunks
-                if self.environment.parsed_options.stream_response_done_flag:
+                if self.provider != "torchserve":
                     if done:
                         if chunk != b"data: [DONE]":
                             print(f"WARNING: Received more chunks after [DONE]: {chunk}")
@@ -710,7 +713,7 @@ class LLMUser(HttpUser):
                     dur_chunks.append(now - t_prev)
                     t_prev = now
                     if self.stream:
-                        if self.environment.parsed_options.stream_response_done_flag:
+                        if self.provider != "torchserve":
                             assert chunk.startswith(
                                 b"data:"
                             ), f"Unexpected chunk not starting with 'data': {chunk}"
@@ -718,7 +721,10 @@ class LLMUser(HttpUser):
                             if chunk.strip() == b"[DONE]":
                                 done = True
                                 continue
-                    data = orjson.loads(chunk)
+                    if self.provider != "torchserve":
+                        data = chunk.decode("utf-8")
+                    else:
+                        data = orjson.loads(chunk)
                     out = self.provider_formatter.parse_output_json(data, self.prompt)
                     if out.usage_tokens:
                         total_usage_tokens = (
@@ -937,12 +943,6 @@ def init_parser(parser):
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Print the result of each generation",
-    )
-    parser.add_argument(
-        "--stream-response-done-flag",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Flag of the completion in the result of each generation",
     )
 
 
