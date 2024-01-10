@@ -37,6 +37,7 @@ prompt_prefix = "Pad "  # exactly one token
 prompt = """Generate a Django application with Authentication, JWT, Tests, DB support. Show docker-compose for python and postgres. Show the complete code for every file!"""
 prompt_tokens = 35  # from Llama tokenizer tool (so we don't import it here)
 prompt_random_tokens = 10
+prompt_text_random_seed = 5
 
 
 class FixedQPSPacer:
@@ -475,31 +476,35 @@ class TorchServeProvider(BaseProvider):
         return f"/predictions/{self.model}"
 
     def format_payload(self, prompt, max_tokens):
-        return prompt
+        prompt_list = prompt.split(" ")
+        if not self.environment.parsed_options.prompt_randomize:
+            rp = random.randint(prompt_text_random_seed, len(prompt_list))
+        else:
+            rp = len(prompt_list)
+
+        cur_prompt_list = prompt_list[:rp]
+        cur_prompt = " ".join(cur_prompt_list)
+        return {
+            "prompt": cur_prompt,
+            "max_new_tokens": max_tokens,
+        }
 
     def parse_output_json(self, data, prompt):
-        if not self.parsed_options.stream:
-            if "tokens" in data:
-                return ChunkMetadata(
-                    text=data["text"],
-                    logprob_tokens=len(data["tokens"]),
-                    usage_tokens=None,
-                    prompt_usage_tokens=None,
-                )
-            else:
-                return ChunkMetadata(
-                    text=data["text"],
-                    logprob_tokens=None,
-                    usage_tokens=None,
-                    prompt_usage_tokens=None,
-                )
-        else:
+        if "tokens" in data:
             return ChunkMetadata(
                 text=data["text"],
-                logprob_tokens=1,
+                logprob_tokens=len(data["tokens"]),
                 usage_tokens=None,
                 prompt_usage_tokens=None,
             )
+        else:
+            return ChunkMetadata(
+                text=data["text"],
+                logprob_tokens=None,
+                usage_tokens=None,
+                prompt_usage_tokens=None,
+            )
+
 
 PROVIDER_CLASS_MAP = {
     "fireworks": FireworksProvider,
@@ -727,10 +732,9 @@ class LLMUser(HttpUser):
 
                 if len(chunk) == 0:
                     continue  # come providers send empty lines between data chunks
-                if self.provider != "torchserve":
-                    if done:
-                        if chunk != b"data: [DONE]":
-                            print(f"WARNING: Received more chunks after [DONE]: {chunk}")
+                if done:
+                    if self.provider != "torchserve" and chunk != b"data: [DONE]":
+                        print(f"WARNING: Received more chunks after [DONE]: {chunk}")
                 try:
                     now = time.perf_counter()
                     dur_chunks.append(now - t_prev)
@@ -744,10 +748,8 @@ class LLMUser(HttpUser):
                             if chunk.strip() == b"[DONE]":
                                 done = True
                                 continue
-                    if self.provider != "torchserve":
-                        data = chunk.decode("utf-8")
-                    else:
-                        data = orjson.loads(chunk)
+
+                    data = orjson.loads(chunk)
                     out = self.provider_formatter.parse_output_json(data, self.prompt)
                     if out.usage_tokens:
                         total_usage_tokens = (
