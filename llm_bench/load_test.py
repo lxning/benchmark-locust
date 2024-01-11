@@ -491,17 +491,19 @@ class TorchServeProvider(BaseProvider):
 
     def parse_output_json(self, data, prompt):
         if "tokens" in data:
+            # streaming chunk
             return ChunkMetadata(
                 text=data["text"],
-                logprob_tokens=len(data["tokens"]),
+                logprob_tokens=1,
                 usage_tokens=None,
                 prompt_usage_tokens=None,
             )
         else:
+            # non-streaming response
             return ChunkMetadata(
                 text=data["text"],
-                logprob_tokens=None,
-                usage_tokens=None,
+                logprob_tokens=len(data["tokens"]),
+                usage_tokens=len(data["tokens"]),
                 prompt_usage_tokens=None,
             )
 
