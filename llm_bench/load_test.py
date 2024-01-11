@@ -476,16 +476,8 @@ class TorchServeProvider(BaseProvider):
         return f"/predictions/{self.model}"
 
     def format_payload(self, prompt, max_tokens):
-        prompt_list = prompt.split(" ")
-        if not self.environment.parsed_options.prompt_randomize:
-            rp = random.randint(prompt_text_random_seed, len(prompt_list))
-        else:
-            rp = len(prompt_list)
-
-        cur_prompt_list = prompt_list[:rp]
-        cur_prompt = " ".join(cur_prompt_list)
         return {
-            "prompt": cur_prompt,
+            "prompt": prompt,
             "max_new_tokens": max_tokens,
         }
 
