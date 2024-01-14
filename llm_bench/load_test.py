@@ -641,6 +641,7 @@ class LLMUser(HttpUser):
             # TODO: add some server info with git version
             "provider": self.provider,
             "model": self.model,
+            "url": self.provider_formatter.get_url(), 
             "prompt_tokens": self.environment.parsed_options.prompt_tokens,  # might be overwritten based on metric
             "generation_tokens": str(self.max_tokens_sampler),
             "stream": self.stream,
@@ -815,6 +816,10 @@ class LLMUser(HttpUser):
                     dur_total / num_tokens * 1000,
                     num_tokens,
                 )
+                add_custom_metric(
+                    "overall_tokens_per_second",
+                    num_tokens / dur_total,
+                    num_tokens)
             if (
                 prompt_usage_tokens is not None
                 and self.prompt_tokenizer_tokens is not None
@@ -974,6 +979,8 @@ def init_parser(parser):
 @events.quitting.add_listener
 def _(environment, **kw):
     total_latency = environment.stats.entries[("total_latency", "METRIC")]
+    start_time = environment.stats.entries[(InitTracker.logging_params["url"], "POST")].start_time
+    end_time = environment.stats.entries[("num_tokens", "METRIC")].last_request_timestamp
     if environment.stats.total.num_failures > 0 or total_latency.num_requests == 0:
         print("Test failed due to failed requests")
         environment.process_exit_code = 1
@@ -1002,7 +1009,8 @@ def _(environment, **kw):
         entries["latency_per_token"] = ""
     entries["num_requests"] = total_latency.num_requests
     entries["qps"] = total_latency.total_rps
-
+    overall_tokens_per_second = entries["num_tokens"] * environment.stats.entries[("num_tokens", "METRIC")].num_requests / (end_time - start_time) 
+    entries["overall_tokens_per_second"] = overall_tokens_per_second
     pretty_name = lambda s: " ".join([w.capitalize() for w in s.split("_")])
     entries = {pretty_name(k): v for k, v in entries.items()}
 
